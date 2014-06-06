@@ -8,7 +8,7 @@ from django.template.loader import render_to_string
 
 
 USE_SSL = getattr(settings, "NOTIFICATION_USE_SSL", False)
-CONTEXT_PROCESSORS = getattr(settings, "NOTIFICATION_CONTEXT_PROCESSORS", [])
+CONTEXT_PROCESSORS = getattr(settings, "TEMPLATE_CONTEXT_PROCESSORS", [])
 
 
 def from_string_import(string):
@@ -18,10 +18,14 @@ def from_string_import(string):
     module, attrib = string.rsplit('.', 1)
     return getattr(importlib.import_module(module), attrib)
 
-def apply_context_processors(context):
+
+def apply_context_processors(context, request=None):
     for cp in [from_string_import(x) for x in CONTEXT_PROCESSORS]:
-        context.update(cp())
+        try:
+            context.update(cp(request))
+        except AttributeError: pass # skip ones that depend on request
     return context
+
 
 def get_formatted_message(formats, notice_type, context, medium):
     """

@@ -1,7 +1,6 @@
 import celery
 
 from notification.backends import get_backend
-from notification.utils import get_formatted_message
 
 
 @celery.task(default_retry_delay=30 * 60)
@@ -23,6 +22,4 @@ def send_notice(notice, notice_settings, context):
         backend = get_backend(setting.medium)
         # get prerendered format messages
         context.update({'notice_setting': setting})
-        message = get_formatted_message(
-            backend.formats, notice.notice_type, context, backend.slug)
-        backend.send(message, notice.recipient)
+        backend.send(notice, context)

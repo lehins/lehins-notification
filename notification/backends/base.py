@@ -30,7 +30,7 @@ class NotificationBackend(object):
         """List of template names that will be rendered."""
         raise NotImplemented
 
-    def send(self, message, recipients, *args, **kwargs):
+    def send(self, notice, context, *args, **kwargs):
         """
         Send the notification.
         """

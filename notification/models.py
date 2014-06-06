@@ -7,7 +7,7 @@ from django.core.urlresolvers import reverse
 from django.contrib.auth.models import User as AuthUser
 from django.contrib.contenttypes import generic
 from django.contrib.contenttypes.models import ContentType
-from django.template.base import Template, Context
+from django.template.base import Template, Context, TemplateDoesNotExist
 from django.template.loader import render_to_string
 from django.utils.safestring import mark_safe
 from django.utils.translation import ugettext_lazy as _
@@ -210,6 +210,8 @@ class NoticeManager(models.Manager):
         kwargs["sent"] = True
         return self.notices_for(sender, **kwargs)
 
+
+
 class Notice(models.Model):
 
     recipient = models.ForeignKey(User, related_name='recieved_notices', verbose_name=_('recipient'))
@@ -224,6 +226,10 @@ class Notice(models.Model):
     related_object = generic.GenericForeignKey('content_type', 'object_id')
 
     objects = NoticeManager()
+
+    @property
+    def template_name(self):
+        return 'notification/%s.html' % self.notice_type.template_slug
 
     def __str__(self):
         return self.notice_type.description
@@ -246,10 +252,15 @@ class Notice(models.Model):
             self.save()
         return unseen
 
+
     def render(self):
-        template = Template(self.notice_type.template, name=self.notice_type.label)
-        context = apply_context_processors({'notice':self})
-        return mark_safe(template.render(Context(context)))
+        try:
+            template = Template(self.notice_type.template, name=self.notice_type.label)
+            context = apply_context_processors({'notice':self})
+            return mark_safe(template.render(Context(context)))
+        except TemplateDoesNotExist:
+            if settings.DEBUG and not settings.NOTIFICATION_FAIL_SILENTLY:
+                raise
 
     def get_absolute_url(self):
         return reverse("notification:notice", kwargs={'pk': self.pk})
@@ -276,11 +287,16 @@ def smart_send(users, label, extra_context=None, sender=None, related_object=Non
     displayed on the site.
     """
     try:
+        notice_type = NoticeType.objects.get(label=label)
+    except NoticeType.DoesNotExist:
+        if settings.DEBUG and not settings.NOTIFICATION_FAIL_SILENTLY:
+            raise
+        return
+    try:
         iter_users = iter(users)
     except TypeError:
         iter_users = iter([users])
     for user in iter_users:
-        notice_type = NoticeType.objects.get(label=label)
         notice_settings = NoticeSetting.objects.filter_or_create(
             user, notice_type).filter(send=True)
         if notice_settings:

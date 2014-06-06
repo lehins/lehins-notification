@@ -6,9 +6,8 @@ from django.shortcuts import render_to_response, get_object_or_404
 from django.template import RequestContext
 from django.template.response import TemplateResponse
 from django.views.decorators.csrf import csrf_exempt
-#from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
+from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 
-from crowdsite.utils.paginator import Paginator, EmptyPage, PageNotAnInteger
 
 from notification.models import *
 from notification.decorators import basic_auth_required, simple_basic_auth_callback
