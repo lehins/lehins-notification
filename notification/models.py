@@ -130,7 +130,7 @@ class NoticeSetting(models.Model):
     notice_type = models.ForeignKey(NoticeType, verbose_name=_('notice type'))
     medium = models.CharField(
         _('medium'), max_length=100, choices=NoticeMediaListChoices())
-    send = models.BooleanField(_('send'))
+    send = models.BooleanField(_('send'), default=False)
     uuid = models.CharField(
         _('uuid'), max_length=36, editable=False, default=uuid_generator)
 
@@ -220,7 +220,7 @@ class Notice(models.Model):
     added = models.DateTimeField(_('added'), auto_now_add=True)
     unseen = models.BooleanField(_('unseen'), default=True)
     archived = models.BooleanField(_('archived'), default=False)
-    on_site = models.BooleanField(_('on site'))
+    on_site = models.BooleanField(_('on site'), default=False)
     content_type = models.ForeignKey(ContentType, null=True)
     object_id = models.PositiveIntegerField(null=True)
     related_object = generic.GenericForeignKey('content_type', 'object_id')
