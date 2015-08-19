@@ -20,6 +20,5 @@ def send_notice(notice, notice_settings, context):
                     'notice_type': notice.notice_type})
     for setting in notice_settings:
         backend = get_backend(setting.medium)
-        # get prerendered format messages
         context.update({'notice_setting': setting})
         backend.send(notice, context)

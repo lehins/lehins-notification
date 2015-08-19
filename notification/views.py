@@ -1,207 +1,110 @@
 from django.contrib.auth.decorators import login_required
-from django.contrib.syndication.views import Feed
-from django.core.urlresolvers import reverse
-from django.http import HttpResponseRedirect, HttpResponseForbidden, Http404
-from django.shortcuts import render_to_response, get_object_or_404
-from django.template import RequestContext
+from django.core.exceptions import PermissionDenied
+from django.forms import CheckboxInput
+from django.shortcuts import get_object_or_404
 from django.template.response import TemplateResponse
+from django.utils.encoding import force_text
+from django.utils.decorators import method_decorator
+from django.utils.html import format_html
 from django.views.decorators.csrf import csrf_exempt
-from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
+from django.views.generic import TemplateView
+
+from notification.models import NoticeType, NoticeSetting, NoticeMediaListChoices
 
 
-from notification.models import *
-from notification.decorators import basic_auth_required, simple_basic_auth_callback
-from notification.feeds import NoticeUserFeed
+class NoticeSettingGroup(object):
+    title = None
+    settings = []
+    template = "<h5>{title}</h5><p>{settings}</p>"
+    setting_template = "<p>{notice_type.display}<ul>{checkboxes}</ul></p>"
+    checkbox_template = "<li><label>{label} {input}</label></li>"
+    notice_types = None
+    media_choices = dict(NoticeMediaListChoices())
+    _notice_settings = None
 
+    def __init__(self, user, title, notice_types):
+        self.user = user
+        self.title = title
+        self.notice_types = notice_types
 
-@basic_auth_required(realm='Notices Feed', callback_func=simple_basic_auth_callback)
-def feed_for_user(request):
-    """
-    An atom feed for all unarchived :model:`notification.Notice`s for a user.
-    """
-    url = "feed/%s" % request.user.username
-    return Feed(request, url, {
-        "feed": NoticeUserFeed,
-    })
-
-
-@login_required
-def notices(request, template_name="notification/notices.html", extra_context=None):
-    """
-    The main notices index view.
-    
-    Template: :template:`notification/notices.html`
-    
-    Context:
-    
-        notices
-            A list of :model:`notification.Notice` objects that are not archived
-            and to be displayed on the site.
-    """
-    notices = Notice.objects.notices_for(request.user, on_site=True)
-    paginator = Paginator(notices, 15)
-
-    page = request.GET.get('page')
-    try:
-        notices = paginator.page(page)
-    except PageNotAnInteger:
-        notices = paginator.page(1)
-    except EmptyPage:
-        notices = paginator.page(paginator.num_pages)
-    context = {"notices": notices,}
-    if extra_context:
-        context.update(extra_context)
-    return render_to_response(
-        template_name, context, context_instance=RequestContext(request))
-
-
-@login_required
-def notice_settings(request):
-    """
-    The notice settings view.
-    
-    Template: :template:`notification/notice_settings.html`
-    
-    Context:
+    @property
+    def notice_type_settings(self):
+        if self._notice_settings is None:
+            self._notice_settings = []
+            for notice_type in self.notice_types:
+                self._notice_settings.append(
+                    NoticeSetting.objects.filter_or_create(
+                        self.user, notice_type).order_by('medium'))
+        return self._notice_settings
         
-        notice_types
-            A list of all :model:`notification.NoticeType` objects.
-        
-        notice_settings
-            A dictionary containing ``column_headers`` for each notice media
-            and ``rows`` containing a list of dictionaries: ``notice_type``, a
-            :model:`notification.NoticeType` object and ``cells``, a list of
-            tuples whose first value is suitable for use in forms and the second
-            value is ``True`` or ``False`` depending on a ``request.POST``
-            variable called ``form_label``, whose valid value is ``on``.
-    """
-    notice_types = NoticeType.objects.all()
-    settings_table = []
-    for notice_type in notice_types:
-        settings_row = []
-        for medium_id, medium_display in NoticeMediaListChoices():
-            form_label = "%s_%s" % (notice_type.label, medium_id)
-            setting = get_notification_setting(request.user, notice_type, medium_id)
-            if request.method == "POST":
-                if request.POST.get(form_label) == "on":
-                    if not setting.send:
-                        setting.send = True
-                        setting.save()
-                else:
-                    if setting.send:
-                        setting.send = False
-                        setting.save()
-            settings_row.append((form_label, setting.send))
-        settings_table.append({"notice_type": notice_type, "cells": settings_row})
-    
-    notice_settings = {
-        "column_headers": [
-            medium_display for medium_id, medium_display in NoticeMediaListChoices()],
-        "rows": settings_table,
-    }
-    
-    return render_to_response("notification/notice_settings.html", {
-        "notice_types": notice_types,
-        "notice_settings": notice_settings,
-    }, context_instance=RequestContext(request))
 
+    def get_settings(self):
+        settings = []
+        notice_settings = self.notice_settings
+        for n, notice_type in enumerate(self.notice_types):
+            checkboxes = []
+            for notice_setting in notice_settings[n]:
+                if not notice_setting.can_modify:
+                    continue
+                checkboxes.append(self.get_checkbox(notice_type, notice_setting))
+            settings.append(format_html(
+                self.setting_template, notice_type=notice_type,
+                notice_setting=notice_setting, checkboxes='\n'.join(checkboxes)))
+        return '\n'.join(settings)
 
-@login_required
-def single(request, id, mark_seen=True):
-    """
-    Detail view for a single :model:`notification.Notice`.
-    
-    Template: :template:`notification/single.html`
-    
-    Context:
-    
-        notice
-            The :model:`notification.Notice` being viewed
-    
-    Optional arguments:
-    
-        mark_seen
-            If ``True``, mark the notice as seen if it isn't
-            already.  Do nothing if ``False``.  Default: ``True``.
-    """
-    notice = get_object_or_404(Notice, id=id)
-    if request.user == notice.recipient:
-        if mark_seen and notice.unseen:
-            notice.unseen = False
-            notice.save()
-        return render_to_response("notification/single.html", {
-            "notice": notice,
-        }, context_instance=RequestContext(request))
-    raise Http404
+    def get_checkbox_name(self, notice_type, notice_setting):
+        return "%s_%s" % (notice_type.label, notice_setting.medium)
 
+    def get_checkbox(self, notice_type, notice_setting):
+        label = self.media_choices[notice_setting.medium]
+        name = self.get_checkbox_name()
+        return format_html(
+            self.checkbox_template, label=force_text(label),
+            input=CheckboxInput().render(name, notice_setting.send))
 
-@login_required
-def archive(request, noticeid=None, next_page=None):
-    """
-    Archive a :model:`notices.Notice` if the requesting user is the
-    recipient or if the user is a superuser.  Returns a
-    ``HttpResponseRedirect`` when complete.
-    
-    Optional arguments:
-    
-        noticeid
-            The ID of the :model:`notices.Notice` to be archived.
-        
-        next_page
-            The page to redirect to when done.
-    """
-    if noticeid:
-        try:
-            notice = Notice.objects.get(id=noticeid)
-            if request.user == notice.recipient or request.user.is_superuser:
-                notice.archive()
-            else:   # you can archive other users' notices
-                    # only if you are superuser.
-                return HttpResponseRedirect(next_page)
-        except Notice.DoesNotExist:
-            return HttpResponseRedirect(next_page)
-    return HttpResponseRedirect(next_page)
+    def render(self):
+        return format_html(
+            self.template, title=force_text(self.title), settings=self.get_settings())
 
-
-@login_required
-def delete(request, noticeid=None, next_page=None):
-    """
-    Delete a :model:`notices.Notice` if the requesting user is the recipient
-    or if the user is a superuser.  Returns a ``HttpResponseRedirect`` when
-    complete.
+    def update_settings(self, request):
+        """Modifies settings depending on the checkboxes selected in a submitted form"""
+        assert request.method == 'POST'
+        notice_settings = self.notice_settings
+        for n, notice_type in enumerate(self.notice_types):
+            for notice_setting in notice_settings[n]:
+                checkbox_name = self.get_checkbox_name(notice_type, notice_setting)
+                new_send = request.POST.get(checkbox_name) == "on"
+                if new_send != notice_setting.send:
+                    notice_setting.send = new_send
+                    notice_setting.save()    
+    update_settings.alters_data = True
     
-    Optional arguments:
-    
-        noticeid
-            The ID of the :model:`notices.Notice` to be archived.
-        
-        next_page
-            The page to redirect to when done.
-    """
-    if noticeid:
-        try:
-            notice = Notice.objects.get(id=noticeid)
-            if request.user == notice.recipient or request.user.is_superuser:
-                notice.delete()
-            else:   # you can delete other users' notices
-                    # only if you are superuser.
-                return HttpResponseRedirect(next_page)
-        except Notice.DoesNotExist:
-            return HttpResponseRedirect(next_page)
-    return HttpResponseRedirect(next_page)
 
+class NoticeSettingsView(TemplateView):
+    group_class = NoticeSettingGroup
 
-@login_required
-def mark_all_seen(request):
-    """
-    Mark all unseen notices for the requesting user as seen.  Returns a
-    ``HttpResponseRedirect`` when complete. 
-    """
-    
-    for notice in Notice.objects.notices_for(request.user, unseen=True):
-        notice.unseen = False
-        notice.save()
-    return HttpResponseRedirect(reverse("notification_notices"))
+    def get_notice_types(self):
+        return NoticeType.objects.exclude(allowed=0)
+
+    def get_notice_groups(self):
+        if self.groups is None:
+            return [self.group_class(
+                self.request.user, "Notice Settings", self.get_notice_types())]
+
+    def get_context_data(self, **kwargs):
+        kwargs['notice_groups'] = self.get_notice_groups()
+        return super(NoticeSettingsView, self).get_context_data(**kwargs)
+
+    @method_decorator(login_required)
+    def dispatch(self, *args, **kwargs):
+        return super(NoticeSettingsView, self).dispatch(*args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        context = self.get_context_data(**kwargs)
+        for group in context['notice_groups']:
+            group.update_settings(request)
+        return self.render_to_response(context)
+
 
 @csrf_exempt
 def unsubscribe(request, uuid=None, token=None, extra_context=None, 
@@ -209,7 +112,7 @@ def unsubscribe(request, uuid=None, token=None, extra_context=None,
                 template_name_post='notification/unsubscribe_post.html'):
     notice_setting = get_object_or_404(NoticeSetting, uuid=uuid)
     if token != notice_setting.token:
-        return HttpResponseForbidden("Invalid token.")
+        raise PermissionDenied
     if request.method == 'POST':
         notice_setting.send = False
         notice_setting.save()
@@ -217,4 +120,4 @@ def unsubscribe(request, uuid=None, token=None, extra_context=None,
     context = {'notice_setting': notice_setting}
     if not extra_context is None:
         context.update(extra_context)
-    return TemplateResponse(request, template_name, context=context)
+    return TemplateResponse(request, template_name, context=context)    

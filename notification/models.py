@@ -7,50 +7,46 @@ from django.core.urlresolvers import reverse
 from django.contrib.auth.models import User as AuthUser
 from django.contrib.contenttypes import generic
 from django.contrib.contenttypes.models import ContentType
-from django.template.base import Template, Context, TemplateDoesNotExist
-from django.template.loader import render_to_string
-from django.utils.safestring import mark_safe
+from django.utils.encoding import python_2_unicode_compatible
 from django.utils.translation import ugettext_lazy as _
 
 from notification.backends import get_backends, get_backend
 from notification.tasks import send_notice
-from notification.utils import apply_context_processors
 
-__all__ = ["NoticeType", "NoticeSetting", "Notice", "send"]
+__all__ = [
+    'NoticeType', 'NoticeSetting', 'Notice', 'send'
+]
 
 
-DELAY_ALL = getattr(settings, "NOTIFICATION_DELAY_ALL", True)
+DELAY_ALL = getattr(settings, 'NOTIFICATION_DELAY_ALL', True)
 
 ENFORCE_CREATE = getattr(settings, "NOTIFICATION_ENFORCE_CREATE", False)
 
 User = getattr(settings, 'AUTH_USER_MODEL', AuthUser)
 
 
+@python_2_unicode_compatible
 class NoticeType(models.Model):
 
     label = models.CharField(_('label'), max_length=40, unique=True)
     display = models.CharField(_('display'), max_length=100)
     description = models.TextField(_('description'))
-
-    # by default only on for media with sensitivity less than or equal to this number
-    default = models.SmallIntegerField(_('default'), default=2)
-    
+    default = models.SmallIntegerField(
+        _('default'), default=2, help_text="By default will be only turned on for "
+        "media with sensitivity less than or equal to this number.")    
     allowed = models.SmallIntegerField(
-        verbose_name=u"Allowed", default=6, help_text=u"Sum of the media type's "
+        verbose_name=u"Allowed", default=6, help_text="Sum of the media type's "
         "ids stored in backends dictate if the particular medium notification "
-        "can be switch off/on by a user. Currently 2-on_site, 4-email")
-    template = models.TextField(
-        blank=True, help_text="Template that will be used in rendering the notice.")
-
-    def __unicode__(self):
-        return self.label
-
+        "can be switch on/off by a user. Currently 2-on_site, 4-email")
 
     class Meta:
-        ordering = ["label"]
+        ordering = ("label",)
         verbose_name = _("notice type")
         verbose_name_plural = _("notice types")
 
+    def __str__(self):
+        return self.label
+    
     @property
     def template_slug(self):
         return self.label
@@ -112,6 +108,7 @@ class NoticeSettingManager(models.Manager):
         return result
 
 
+@python_2_unicode_compatible
 class NoticeSetting(models.Model):
     """
     Indicates, for a given user, whether to send notifications
@@ -136,6 +133,11 @@ class NoticeSetting(models.Model):
 
     objects = NoticeSettingManager()
 
+    class Meta:
+        verbose_name = _("notice setting")
+        verbose_name_plural = _("notice settings")
+        unique_together = ("user", "notice_type", "medium")
+        
     @property
     def token(self):
         return hashlib.sha1(self.user.email+self.notice_type.label).hexdigest()
@@ -151,19 +153,12 @@ class NoticeSetting(models.Model):
             kwargs['send'] = (get_backend(medium).sensitivity <= notice_type.default)
         super(NoticeSetting, self).__init__(*args, **kwargs)
 
-
-    def __unicode__(self):
+    def __str__(self):
         return self.medium
 
     def get_absolute_url(self):
         return reverse("notification:notice_setting", kwargs={
             'pk': self.pk, 'token': self.token, 'uuid': self.uuid})
-
-
-    class Meta:
-        verbose_name = _("notice setting")
-        verbose_name_plural = _("notice settings")
-        unique_together = ("user", "notice_type", "medium")
 
 
 class NoticeManager(models.Manager):
@@ -185,7 +180,7 @@ class NoticeManager(models.Manager):
         else:
             lookup_kwargs = {"recipient": user}
         if 'archived' not in kwargs:
-            lwargs['archived'] = False
+            kwargs['archived'] = False
         return self.filter(**lookup_kwargs).filter(**kwargs)
 
     def unseen_count_for(self, recipient):
@@ -211,7 +206,7 @@ class NoticeManager(models.Manager):
         return self.notices_for(sender, **kwargs)
 
 
-
+@python_2_unicode_compatible
 class Notice(models.Model):
 
     recipient = models.ForeignKey(User, related_name='recieved_notices', verbose_name=_('recipient'))
@@ -227,6 +222,11 @@ class Notice(models.Model):
 
     objects = NoticeManager()
 
+    class Meta:
+        ordering = ("-added",)
+        verbose_name = _("notice")
+        verbose_name_plural = _("notices")
+    
     @property
     def template_name(self):
         return 'notification/%s.html' % self.notice_type.template_slug
@@ -252,23 +252,8 @@ class Notice(models.Model):
             self.save()
         return unseen
 
-
-    def render(self):
-        try:
-            template = Template(self.notice_type.template, name=self.notice_type.label)
-            context = apply_context_processors({'notice':self})
-            return mark_safe(template.render(Context(context)))
-        except TemplateDoesNotExist:
-            if settings.DEBUG and not settings.NOTIFICATION_FAIL_SILENTLY:
-                raise
-
     def get_absolute_url(self):
         return reverse("notification:notice", kwargs={'pk': self.pk})
-
-    class Meta:
-        ordering = ["-added"]
-        verbose_name = _("notice")
-        verbose_name_plural = _("notices")
 
 
 def smart_send(users, label, extra_context=None, sender=None, related_object=None, 
