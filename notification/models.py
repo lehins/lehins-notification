@@ -5,7 +5,7 @@ from django.db import models
 from django.conf import settings
 from django.core.urlresolvers import reverse
 from django.contrib.auth.models import User as AuthUser
-from django.contrib.contenttypes import generic
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.utils.encoding import python_2_unicode_compatible
 from django.utils.translation import ugettext_lazy as _
@@ -218,7 +218,7 @@ class Notice(models.Model):
     on_site = models.BooleanField(_('on site'), default=False)
     content_type = models.ForeignKey(ContentType, null=True)
     object_id = models.PositiveIntegerField(null=True)
-    related_object = generic.GenericForeignKey('content_type', 'object_id')
+    related_object = GenericForeignKey('content_type', 'object_id')
 
     objects = NoticeManager()
 
